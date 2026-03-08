@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RadioPlan BR — Planejamento de Cobertura para Radioamadores</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<style>
+[v-cloak]{display:none}
+#map{width:100%;height:100%}
+body{overflow:hidden}
+.sidebar{width:420px;min-width:420px;height:100vh;overflow:hidden;display:flex;flex-direction:column;border-right:1px solid var(--bs-border-color)}
+.sidebar-scroll{flex:1;overflow-y:auto}
+.sidebar-scroll::-webkit-scrollbar{width:5px}
+.sidebar-scroll::-webkit-scrollbar-thumb{background:var(--bs-secondary-bg);border-radius:3px}
+.map-wrap{flex:1;position:relative}
+.legend-box{position:absolute;bottom:24px;right:12px;z-index:5;min-width:200px}
+.eirp-box{background:rgba(13,110,253,0.1);border:1px solid rgba(13,110,253,0.25)}
+.band-btn{text-align:left}
+.band-btn.active{border-color:var(--bs-primary)!important;background:rgba(13,110,253,0.15)!important;color:var(--bs-primary)!important}
+</style>
+</head>
+<body>
+
+<div id="app" v-cloak class="d-flex" style="height:100vh;">
+
+  <!-- ============================================ -->
+  <!-- SIDEBAR                                      -->
+  <!-- ============================================ -->
+  <aside class="sidebar bg-body">
+
+    <!-- Header -->
+    <div class="px-3 py-3 border-bottom d-flex align-items-center gap-2">
+      <div class="bg-primary rounded-2 d-flex align-items-center justify-content-center" style="width:36px;height:36px;">
+        <i class="bi bi-broadcast text-white fs-5"></i>
+      </div>
+      <div>
+        <h1 class="fs-6 fw-bold mb-0">RadioPlan BR</h1>
+        <small class="text-secondary">Planejamento de cobertura para radioamadores</small>
+      </div>
+    </div>
+
+    <!-- API Key -->
+    <div v-if="!mapLoaded" class="px-3 py-3 border-bottom bg-body-tertiary">
+      <label class="form-label small mb-1">Google Maps API Key</label>
+      <div class="input-group">
+        <input v-model="apiKey" type="text" class="form-control form-control-sm" placeholder="AIza...">
+        <button @click="loadMap" class="btn btn-primary btn-sm">Carregar</button>
+      </div>
+      <div class="form-text">Necessaria para o mapa e dados de elevacao do terreno.</div>
+    </div>
+
+    <!-- Scrollable content -->
+    <div class="sidebar-scroll px-3 py-2">
+      <div class="accordion" id="sidebarAccordion">
+
+        <!-- ========== COMO FUNCIONA ========== -->
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button class="accordion-button py-2 small fw-semibold" :class="{collapsed:!sections.about}" @click="sections.about=!sections.about" type="button">
+              <i class="bi bi-info-circle me-2 text-primary"></i> Como Funciona
+            </button>
+          </h2>
+          <div v-show="sections.about">
+            <div class="accordion-body small text-body-secondary py-2">
+              <p>Esta ferramenta estima a <strong class="text-body">area de cobertura</strong> do sinal da sua estacao de radioamador usando modelos de propagacao consagrados.</p>
+              <p class="mb-1"><strong class="text-primary">Como usar:</strong></p>
+              <ol class="ps-3 mb-2">
+                <li>Clique no mapa para posicionar sua antena</li>
+                <li>Configure os parametros do transmissor</li>
+                <li>Escolha o modelo de propagacao adequado</li>
+                <li>Clique em <em>"Calcular Cobertura"</em></li>
+              </ol>
+              <p class="text-body-tertiary fst-italic mb-0">A projecao considera terreno real (elevacao), curvatura da Terra e o modelo selecionado. Ideal para planejar repetidoras e bases.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- ========== POSICAO DA ANTENA ========== -->
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button class="accordion-button py-2 small fw-semibold" :class="{collapsed:!sections.position}" @click="sections.position=!sections.position" type="button">
+              <i class="bi bi-geo-alt-fill me-2 text-danger"></i> Posicao da Antena
+            </button>
+          </h2>
+          <div v-show="sections.position">
+            <div class="accordion-body py-2">
+              <p class="form-text mt-0 mb-2">Clique no mapa ou digite as coordenadas manualmente.</p>
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label small mb-1">Latitude</label>
+                  <input type="number" step="any" placeholder="-23.5505" class="form-control form-control-sm" :value="params.lat" @input="params.lat=parseFloat($event.target.value)" @change="syncMarkerFromInput">
+                </div>
+                <div class="col-6">
+                  <label class="form-label small mb-1">Longitude</label>
+                  <input type="number" step="any" placeholder="-46.6333" class="form-control form-control-sm" :value="params.lng" @input="params.lng=parseFloat($event.target.value)" @change="syncMarkerFromInput">
+                </div>
+              </div>
+              <div v-if="baseElevation!==null" class="alert alert-secondary py-1 px-2 mt-2 mb-0 small">
+                <i class="bi bi-mountain me-1"></i>
+                Elevacao do terreno: <strong>{{ baseElevation.toFixed(1) }} m</strong>
+              </div>
+              <button v-if="mapLoaded" @click="toggleMapLock" class="btn btn-sm w-100 mt-2" :class="mapLocked ? 'btn-warning' : 'btn-outline-secondary'">
+                <i class="bi me-1" :class="mapLocked ? 'bi-lock-fill' : 'bi-unlock'"></i>
+                {{ mapLocked ? 'Mapa travado — clique para destravar' : 'Travar posicao (evita cliques acidentais)' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ========== BANDA / PRESET ========== -->
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button class="accordion-button py-2 small fw-semibold" :class="{collapsed:!sections.preset}" @click="sections.preset=!sections.preset" type="button">
+              <i class="bi bi-broadcast-pin me-2 text-warning"></i> Banda / Preset Rapido
+            </button>
+          </h2>
+          <div v-show="sections.preset">
+            <div class="accordion-body py-2">
+              <p class="form-text mt-0 mb-2">Selecione uma banda para preencher frequencia e modelo recomendado.</p>
+              <div class="row g-1">
+                <div class="col-6" v-for="band in bands" :key="band.id">
+                  <button class="btn btn-outline-secondary btn-sm w-100 band-btn" :class="{active:selectedBand===band.id}" @click="applyBandPreset(band)">
+                    <div class="fw-semibold">{{ band.name }}</div>
+                    <small class="opacity-75">{{ band.freq }} MHz</small>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ========== TRANSMISSOR (TX) ========== -->
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button class="accordion-button py-2 small fw-semibold" :class="{collapsed:!sections.tx}" @click="sections.tx=!sections.tx" type="button">
+              <i class="bi bi-send-fill me-2 text-info"></i> Transmissor (TX)
+            </button>
+          </h2>
+          <div v-show="sections.tx">
+            <div class="accordion-body py-2">
+              <div class="mb-2">
+                <label class="form-label small mb-1">Altura da Antena (m)</label>
+                <input type="number" class="form-control form-control-sm" v-model.number="params.antennaHeight" min="1" max="500" step="0.5">
+                <div class="form-text">Altura em relacao ao solo (torre, mastro, etc).</div>
+              </div>
+              <div class="row g-2 mb-2">
+                <div class="col-6">
+                  <label class="form-label small mb-1">Potencia TX (W)</label>
+                  <input type="number" class="form-control form-control-sm" v-model.number="params.power" min="0.01" step="any">
+                  <div class="form-text">Potencia do transmissor.</div>
+                </div>
+                <div class="col-6">
+                  <label class="form-label small mb-1">Ganho Antena (dBi)</label>
+                  <input type="number" class="form-control form-control-sm" v-model.number="params.txGain" step="0.1">
+                  <div class="form-text">Dipolo=2.15, GP¼λ=5.15</div>
+                </div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small mb-1">Frequencia (MHz)</label>
+                <input type="number" class="form-control form-control-sm" v-model.number="params.frequency" min="0.1" step="any">
+                <div class="form-text">Ex: 145.000 (VHF), 438.000 (UHF), 1296 (Micro).</div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small mb-1">Perda no Cabo + Conectores (dB)</label>
+                <input type="number" class="form-control form-control-sm" v-model.number="params.cableLoss" min="0" step="0.1">
+                <div class="form-text">Perdas totais na linha de transmissao.</div>
+              </div>
+              <!-- EIRP em tempo real -->
+              <div class="rounded-2 p-2 eirp-box">
+                <div class="d-flex justify-content-between align-items-center">
+                  <small class="text-primary"><i class="bi bi-lightning-charge-fill me-1"></i>EIRP</small>
+                  <span class="fw-bold text-primary">{{ computedEirp }} dBm</span>
+                </div>
+                <div class="form-text mt-0">Potencia(dBm) + Ganho(dBi) - Perdas(dB)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ========== RECEPTOR (RX) ========== -->
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button class="accordion-button py-2 small fw-semibold collapsed" :class="{collapsed:!sections.rx}" @click="sections.rx=!sections.rx" type="button">
+              <i class="bi bi-inbox-fill me-2 text-success"></i> Receptor (RX)
+            </button>
+          </h2>
+          <div v-show="sections.rx">
+            <div class="accordion-body py-2">
+              <p class="form-text mt-0 mb-2">Parametros do receptor remoto (estacao que recebera o sinal).</p>
+              <div class="mb-2">
+                <label class="form-label small mb-1">Sensibilidade (dBm)</label>
+                <input type="number" class="form-control form-control-sm" v-model.number="params.rxSensitivity" step="1">
+                <div class="form-text">FM: -120 dBm | CW/Digital: -140 dBm</div>
+              </div>
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label small mb-1">Ganho Ant. RX (dBi)</label>
+                  <input type="number" class="form-control form-control-sm" v-model.number="params.rxGain" step="0.1">
+                </div>
+                <div class="col-6">
+                  <label class="form-label small mb-1">Altura Ant. RX (m)</label>
+                  <input type="number" class="form-control form-control-sm" v-model.number="params.rxHeight" min="0.5" max="100" step="0.5">
+                  <div class="form-text">HT=1.5 | Movel=1 | Base=10</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ========== MODELO DE PROPAGACAO ========== -->
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button class="accordion-button py-2 small fw-semibold" :class="{collapsed:!sections.model}" @click="sections.model=!sections.model" type="button">
+              <i class="bi bi-diagram-3-fill me-2 text-info"></i> Modelo de Propagacao
+            </button>
+          </h2>
+          <div v-show="sections.model">
+            <div class="accordion-body py-2">
+              <p class="form-text mt-0 mb-2">O modelo determina como o sinal se atenua com a distancia e o ambiente.</p>
+              <div class="list-group list-group-flush mb-3">
+                <label v-for="m in models" :key="m.id"
+                  class="list-group-item list-group-item-action d-flex gap-2 py-2 px-2"
+                  :class="{'active':params.model===m.id}"
+                  @click="params.model=m.id"
+                  style="cursor:pointer;">
+                  <input type="radio" class="form-check-input mt-1" :value="m.id" v-model="params.model">
+                  <div>
+                    <div class="small fw-semibold">{{ m.name }}</div>
+                    <div class="form-text mt-0" :class="{'text-white-50':params.model===m.id}">{{ m.description }}</div>
+                    <div class="form-text mt-0" :class="{'text-white-50':params.model===m.id}"><i class="bi bi-rulers me-1"></i>{{ m.range }}</div>
+                  </div>
+                </label>
+              </div>
+              <label class="form-label small mb-1">Verificacao de Linha de Visada (LoS)</label>
+              <select class="form-select form-select-sm" v-model="params.losMode">
+                <option value="terrain">Com terreno + curvatura da Terra</option>
+                <option value="fresnel">Com terreno + Zona de Fresnel (60%)</option>
+                <option value="none">Desabilitada (somente modelo)</option>
+              </select>
+              <div class="form-text">Interrompe a cobertura quando o terreno bloqueia a visada direta.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ========== PARAMETROS DA ANALISE ========== -->
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button class="accordion-button py-2 small fw-semibold collapsed" :class="{collapsed:!sections.analysis}" @click="sections.analysis=!sections.analysis" type="button">
+              <i class="bi bi-gear-fill me-2"></i> Parametros da Analise
+            </button>
+          </h2>
+          <div v-show="sections.analysis">
+            <div class="accordion-body py-2">
+              <div class="row g-2 mb-2">
+                <div class="col-6">
+                  <label class="form-label small mb-1">Raio Maximo (km)</label>
+                  <input type="number" class="form-control form-control-sm" v-model.number="params.maxRadius" min="1" max="200" step="1">
+                </div>
+                <div class="col-6">
+                  <label class="form-label small mb-1">Direcoes (raios)</label>
+                  <select class="form-select form-select-sm" v-model.number="params.numDirections">
+                    <option :value="36">36 (rapido)</option>
+                    <option :value="72">72 (normal)</option>
+                    <option :value="120">120 (detalhado)</option>
+                    <option :value="180">180 (preciso)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label small mb-1">Amostras/Raio</label>
+                  <select class="form-select form-select-sm" v-model.number="params.numSamples">
+                    <option :value="20">20 (rapido)</option>
+                    <option :value="40">40 (normal)</option>
+                    <option :value="60">60 (detalhado)</option>
+                    <option :value="80">80 (preciso)</option>
+                  </select>
+                </div>
+                <div class="col-6">
+                  <label class="form-label small mb-1">Margem Fading (dB)</label>
+                  <input type="number" class="form-control form-control-sm" v-model.number="params.fadeMargin" min="0" max="30" step="1">
+                  <div class="form-text">Tipico: 6-12 dB</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ========== VISUALIZACAO ========== -->
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button class="accordion-button py-2 small fw-semibold collapsed" :class="{collapsed:!sections.viz}" @click="sections.viz=!sections.viz" type="button">
+              <i class="bi bi-eye-fill me-2"></i> Visualizacao
+            </button>
+          </h2>
+          <div v-show="sections.viz">
+            <div class="accordion-body py-2">
+              <div class="mb-2">
+                <label class="form-label small mb-1">Modo de exibicao</label>
+                <select class="form-select form-select-sm" v-model="params.vizMode">
+                  <option value="polygon">Poligono de cobertura</option>
+                  <option value="heatmap">Mapa de calor (intensidade)</option>
+                  <option value="both">Poligono + Mapa de calor</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label small mb-1">Opacidade: {{ params.fillOpacity }}%</label>
+                <input type="range" class="form-range" v-model.number="params.fillOpacity" min="5" max="80">
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /accordion -->
+
+      <!-- ========== RESULTADOS ========== -->
+      <div v-if="results" class="card mt-2 border-primary">
+        <div class="card-header bg-primary bg-opacity-10 py-2">
+          <h6 class="mb-0 text-primary"><i class="bi bi-bar-chart-fill me-2"></i>Resultados da Analise</h6>
+        </div>
+        <div class="card-body py-2 px-3">
+          <table class="table table-sm table-borderless mb-2 small">
+            <tbody>
+              <tr><td class="text-body-secondary">EIRP</td><td class="text-end fw-semibold font-monospace">{{ results.eirp }} dBm</td></tr>
+              <tr><td class="text-body-secondary">Limiar de recepcao</td><td class="text-end fw-semibold font-monospace">{{ results.threshold }} dBm</td></tr>
+              <tr><td class="fw-semibold text-white">Alcance maximo</td><td class="text-end fw-bold font-monospace text-info">{{ results.maxDist }} km</td></tr>
+              <tr><td class="text-body-secondary">Alcance minimo</td><td class="text-end fw-semibold font-monospace">{{ results.minDist }} km</td></tr>
+              <tr><td class="fw-semibold text-white">Alcance medio</td><td class="text-end fw-bold font-monospace text-info">{{ results.avgDist }} km</td></tr>
+              <tr><td class="text-body-secondary">Area aproximada</td><td class="text-end fw-semibold font-monospace">{{ results.area }} km²</td></tr>
+              <tr><td class="text-body-secondary">Bloqueios LoS</td><td class="text-end fw-semibold font-monospace">{{ results.losCutoffs }} dir</td></tr>
+              <tr><td class="text-body-secondary">Limites sinal</td><td class="text-end fw-semibold font-monospace">{{ results.modelCutoffs }} dir</td></tr>
+              <tr><td class="text-body-secondary">Elevacao base</td><td class="text-end fw-semibold font-monospace">{{ results.baseElev }} m</td></tr>
+              <tr><td class="text-body-secondary">Modelo</td><td class="text-end fw-semibold">{{ results.modelName }}</td></tr>
+              <tr><td class="text-body-secondary">Tempo</td><td class="text-end fw-semibold font-monospace">{{ results.elapsed }} s</td></tr>
+            </tbody>
+          </table>
+          <div class="alert alert-info py-2 px-3 small mb-0">
+            <i class="bi bi-lightbulb me-1"></i>
+            <strong>Interpretacao:</strong>
+            Sua estacao alcancaria em media <strong>{{ results.avgDist }} km</strong>,
+            cobrindo ~<strong>{{ results.area }} km²</strong>.
+            <span v-if="results.losCutoffs>0">{{ results.losCutoffs }} direcoes foram limitadas pelo terreno.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== BOTOES ========== -->
+      <div class="d-grid gap-2 mt-3 mb-3">
+        <button @click="calculateCoverage" :disabled="!mapLoaded||calculating" class="btn btn-success">
+          <span v-if="calculating"><span class="spinner-border spinner-border-sm me-1"></span>Calculando... {{ progressPct }}%</span>
+          <span v-else><i class="bi bi-play-fill me-1"></i>Calcular Cobertura</span>
+        </button>
+        <div class="row g-2">
+          <div class="col-6">
+            <button @click="clearCoverage" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-trash3 me-1"></i>Limpar</button>
+          </div>
+          <div class="col-6">
+            <button @click="exportKML" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-download me-1"></i>Exportar KML</button>
+          </div>
+        </div>
+      </div>
+    </div><!-- /sidebar-scroll -->
+
+    <!-- Status Bar -->
+    <div class="px-3 py-2 border-top small" :class="statusType==='error'?'text-danger bg-danger-subtle':statusType==='success'?'text-success bg-success-subtle':'text-secondary'">
+      <i :class="statusType==='error'?'bi bi-x-circle':statusType==='success'?'bi bi-check-circle':'bi bi-info-circle'" class="me-1"></i>
+      {{ statusMsg }}
+    </div>
+  </aside>
+
+  <!-- ============================================ -->
+  <!-- MAPA                                         -->
+  <!-- ============================================ -->
+  <main class="map-wrap">
+    <!-- Progress -->
+    <div v-if="calculating" class="progress position-absolute top-0 start-0 end-0" style="height:4px;z-index:10;border-radius:0;">
+      <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" :style="{width:progressPct+'%'}"></div>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Legenda -->
+    <div v-if="showLegend" class="card legend-box shadow">
+      <div class="card-body py-2 px-3 small">
+        <h6 class="card-title mb-2 small fw-bold">Nivel de Sinal</h6>
+        <div class="d-flex align-items-center gap-2 mb-1"><span style="display:inline-block;width:20px;height:10px;border-radius:2px;background:#00c853;"></span><span>Excelente (> -70 dBm)</span></div>
+        <div class="d-flex align-items-center gap-2 mb-1"><span style="display:inline-block;width:20px;height:10px;border-radius:2px;background:#64dd17;"></span><span>Bom (-70 a -85 dBm)</span></div>
+        <div class="d-flex align-items-center gap-2 mb-1"><span style="display:inline-block;width:20px;height:10px;border-radius:2px;background:#ffd600;"></span><span>Moderado (-85 a -100 dBm)</span></div>
+        <div class="d-flex align-items-center gap-2 mb-1"><span style="display:inline-block;width:20px;height:10px;border-radius:2px;background:#ff6d00;"></span><span>Fraco (-100 a -110 dBm)</span></div>
+        <div class="d-flex align-items-center gap-2"><span style="display:inline-block;width:20px;height:10px;border-radius:2px;background:#d50000;"></span><span>Marginal (-110 a -120 dBm)</span></div>
+      </div>
+    </div>
+
+    <!-- Placeholder -->
+    <div v-if="!mapLoaded" class="position-absolute top-0 start-0 end-0 bottom-0 d-flex align-items-center justify-content-center bg-body-tertiary">
+      <div class="text-center px-4" style="max-width:480px;">
+        <div class="bg-primary bg-opacity-10 rounded-3 d-inline-flex align-items-center justify-content-center mb-3" style="width:64px;height:64px;">
+          <i class="bi bi-broadcast fs-1 text-primary"></i>
+        </div>
+        <h2 class="fw-bold mb-2">RadioPlan BR</h2>
+        <p class="text-body-secondary">Ferramenta de planejamento de cobertura RF para radioamadores brasileiros. Insira sua API Key do Google Maps para comecar.</p>
+        <div class="d-flex flex-wrap justify-content-center gap-1 mt-3">
+          <span class="badge text-bg-secondary">VHF/UHF</span>
+          <span class="badge text-bg-secondary">HF</span>
+          <span class="badge text-bg-secondary">Okumura-Hata</span>
+          <span class="badge text-bg-secondary">COST-231</span>
+          <span class="badge text-bg-secondary">Linha de Visada</span>
+          <span class="badge text-bg-secondary">Fresnel</span>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ============================================ -->
+<!-- VUE APP + MODELOS DE PROPAGACAO              -->
+<!-- ============================================ -->
+<script>
+'use strict';
+
+// ================================================
+// MODELOS DE PROPAGACAO
+// ================================================
+// Cada modelo é uma funcao pura:
+//   (distanciaMetros, frequenciaMHz, alturaTX_m, alturaRX_m) => perdaDB
+//
+// Para adicionar um novo modelo:
+//   1. Crie a funcao no objeto PropagationModels
+//   2. Adicione a entrada correspondente em MODEL_REGISTRY
+// ================================================
+
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+const PropagationModels = {
+
+  /** Espaco Livre (Friis) — cenario ideal sem obstaculos. */
+  friis(distM, freqMHz) {
+    if (distM <= 0) return 0;
+    return 20 * Math.log10(distM / 1000) + 20 * Math.log10(freqMHz) + 32.44;
+  },
+
+  /** Okumura-Hata Urbano. 150-1500 MHz, 1-20 km, TX 30-200 m, RX 1-10 m. */
+  'hata-urban'(distM, freqMHz, hTx, hRx) {
+    if (distM <= 0) return 0;
+    const dKm = Math.max(distM / 1000, 0.1), f = clamp(freqMHz, 150, 1500);
+    const hb = clamp(hTx, 30, 200), hm = clamp(hRx, 1, 10);
+    const aHm = (1.1 * Math.log10(f) - 0.7) * hm - (1.56 * Math.log10(f) - 0.8);
+    return 69.55 + 26.16 * Math.log10(f) - 13.82 * Math.log10(hb) - aHm + (44.9 - 6.55 * Math.log10(hb)) * Math.log10(dKm);
+  },
+
+  /** Okumura-Hata Suburbano. */
+  'hata-suburban'(distM, freqMHz, hTx, hRx) {
+    const f = clamp(freqMHz, 150, 1500);
+    return PropagationModels['hata-urban'](distM, freqMHz, hTx, hRx) - 2 * Math.pow(Math.log10(f / 28), 2) - 5.4;
+  },
+
+  /** Okumura-Hata Rural / Campo Aberto. */
+  'hata-rural'(distM, freqMHz, hTx, hRx) {
+    const f = clamp(freqMHz, 150, 1500);
+    return PropagationModels['hata-urban'](distM, freqMHz, hTx, hRx) - 4.78 * Math.pow(Math.log10(f), 2) + 18.33 * Math.log10(f) - 40.94;
+  },
+
+  /** COST-231 Hata. 1500-2000 MHz. */
+  cost231(distM, freqMHz, hTx, hRx) {
+    if (distM <= 0) return 0;
+    const dKm = Math.max(distM / 1000, 0.1), f = clamp(freqMHz, 1500, 2000);
+    const hb = clamp(hTx, 30, 200), hm = clamp(hRx, 1, 10);
+    const aHm = (1.1 * Math.log10(f) - 0.7) * hm - (1.56 * Math.log10(f) - 0.8);
+    return 46.3 + 33.9 * Math.log10(f) - 13.82 * Math.log10(hb) - aHm + (44.9 - 6.55 * Math.log10(hb)) * Math.log10(dKm) + 3;
+  },
+
+  /** ECC-33. 700-3500 MHz. */
+  ecc33(distM, freqMHz, hTx, hRx) {
+    if (distM <= 0) return 0;
+    const dKm = Math.max(distM / 1000, 0.1), f = clamp(freqMHz, 700, 3500);
+    const Afs = 92.4 + 20 * Math.log10(dKm) + 20 * Math.log10(f / 1000);
+    const Abm = 20.41 + 9.83 * Math.log10(dKm) + 7.894 * Math.log10(f / 1000) + 9.56 * Math.pow(Math.log10(f / 1000), 2);
+    const Gb = Math.log10(hTx / 200) * (13.958 + 5.8 * Math.pow(Math.log10(dKm), 2));
+    const Gr = (42.57 + 13.7 * Math.log10(f / 1000)) * (Math.log10(hRx) - 0.585);
+    return Afs + Abm - Gb - Gr;
+  },
+
+  /** Ericsson 9999. 150-1900 MHz. */
+  ericsson(distM, freqMHz, hTx, hRx) {
+    if (distM <= 0) return 0;
+    const dKm = Math.max(distM / 1000, 0.1), f = clamp(freqMHz, 150, 1900);
+    return 36.2 + 30.2 * Math.log10(dKm) - 12.0 * Math.log10(hTx) + 0.1 * Math.log10(hTx) * Math.log10(dKm)
+           - 3.2 * Math.pow(Math.log10(11.75 * hRx), 2) + 44.49 * Math.log10(f) - 4.78 * Math.pow(Math.log10(f), 2);
+  }
+};
+
+// ================================================
+// REGISTRO DE MODELOS (metadata para UI)
+// ================================================
+
+const MODEL_REGISTRY = [
+  { id:'friis',         name:'Espaco Livre (Friis)',        description:'Cenario ideal sem obstaculos. Referencia de melhor caso.',                     range:'Qualquer freq/dist' },
+  { id:'hata-urban',    name:'Okumura-Hata (Urbano)',       description:'Para cidades medias e grandes com edificacoes.',                               range:'150-1500 MHz, 1-20 km' },
+  { id:'hata-suburban',  name:'Okumura-Hata (Suburbano)',    description:'Para bairros residenciais com menos construcoes.',                             range:'150-1500 MHz, 1-20 km' },
+  { id:'hata-rural',    name:'Okumura-Hata (Rural)',        description:'Areas rurais e campo aberto. Recomendado para a maioria dos radioamadores.',   range:'150-1500 MHz, 1-20 km' },
+  { id:'cost231',       name:'COST-231 Hata',               description:'Extensao para freq. acima de 1500 MHz. Faixa de 23 cm e micro-ondas.',        range:'1500-2000 MHz' },
+  { id:'ecc33',         name:'ECC-33 (CEPT)',               description:'Modelo europeu para UHF alta e SHF.',                                         range:'700-3500 MHz' },
+  { id:'ericsson',      name:'Ericsson 9999',               description:'Similar ao Hata com coeficientes suburbanos.',                                 range:'150-1900 MHz' }
+];
+
+// ================================================
+// BANDAS DE RADIOAMADOR BRASILEIRO
+// ================================================
+
+const AMATEUR_BANDS = [
+  { id:'80m', name:'80 metros', freq:3.650,    model:'friis',        power:100 },
+  { id:'40m', name:'40 metros', freq:7.100,    model:'friis',        power:100 },
+  { id:'20m', name:'20 metros', freq:14.200,   model:'friis',        power:100 },
+  { id:'15m', name:'15 metros', freq:21.200,   model:'friis',        power:100 },
+  { id:'10m', name:'10 metros', freq:28.500,   model:'hata-rural',   power:50  },
+  { id:'6m',  name:'6 metros',  freq:50.150,   model:'hata-rural',   power:50  },
+  { id:'2m',  name:'2 metros',  freq:145.000,  model:'hata-rural',   power:25  },
+  { id:'70cm',name:'70 cm',     freq:438.000,  model:'hata-suburban', power:25  },
+  { id:'23cm',name:'23 cm',     freq:1296.000, model:'cost231',      power:10  },
+];
+
+// ================================================
+// GEO + LoS + ELEVATION
+// ================================================
+
+const EARTH_RADIUS = 6371000, K_FACTOR = 4 / 3;
+
+function destinationPoint(lat, lng, bearing, distM) {
+  const toRad = Math.PI / 180, toDeg = 180 / Math.PI;
+  const lat1 = lat * toRad, lng1 = lng * toRad, brng = bearing * toRad, d = distM / EARTH_RADIUS;
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brng));
+  const lng2 = lng1 + Math.atan2(Math.sin(brng) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+  return { lat: lat2 * toDeg, lng: lng2 * toDeg };
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function checkLoS(antennaAlt, targetDist, targetElev, rxH, elevs, si, ti, freqMHz, mode) {
+  if (mode === 'none') return true;
+  const tTop = targetElev + rxH;
+  for (let i = 0; i < ti; i++) {
+    const fr = (i + 1) / (ti + 1), iDist = fr * targetDist;
+    const lineH = antennaAlt + fr * (tTop - antennaAlt);
+    const curve = (iDist * (targetDist - iDist)) / (2 * K_FACTOR * EARTH_RADIUS);
+    let eff = elevs[si + i] + curve;
+    if (mode === 'fresnel' && freqMHz > 0) {
+      const wl = 300 / freqMHz, d1 = iDist, d2 = targetDist - iDist;
+      eff += 0.6 * Math.sqrt((wl * d1 * d2) / (d1 + d2));
+    }
+    if (eff > lineH) return false;
+  }
+  return true;
+}
+
+let elevationService = null;
+
+function getElevation(locs) {
+  return new Promise((resolve, reject) => {
+    elevationService.getElevationForLocations(
+      { locations: locs.map(l => ({ lat: l.lat, lng: l.lng })) },
+      (r, s) => s === 'OK' && r ? resolve(r.map(x => x.elevation)) : reject(new Error('Elevation API: ' + s))
+    );
+  });
+}
+
+async function getElevBatch(pts) {
+  if (pts.length <= 256) return getElevation(pts);
+  const chunks = [], res = [];
+  for (let i = 0; i < pts.length; i += 256) chunks.push(pts.slice(i, i + 256));
+  for (let i = 0; i < chunks.length; i++) { if (i > 0) await sleep(120); res.push(await getElevation(chunks[i])); }
+  return res.flat();
+}
+
+// ================================================
+// VUE APP
+// ================================================
+
+// Objetos Google Maps fora do Vue (nao-reativos) para evitar Proxy
+let gMap = null, gMarker = null, gPolygon = null, gSignalCircles = [];
+
+// Cor fixa por faixa de sinal (nao muda com zoom)
+function signalColor(dbm) {
+  if (dbm > -70)  return '#00c853'; // Excelente
+  if (dbm > -85)  return '#64dd17'; // Bom
+  if (dbm > -100) return '#ffd600'; // Moderado
+  if (dbm > -110) return '#ff6d00'; // Fraco
+  return '#d50000';                  // Marginal
+}
+
+Vue.createApp({
+  data() {
+    return {
+      apiKey: '', mapLoaded: false, mapLocked: false,
+      baseElevation: null, calculating: false, progressPct: 0,
+      statusMsg: 'Insira sua API Key do Google Maps para comecar.', statusType: '',
+      showLegend: false, results: null, lastCoverageData: null, selectedBand: null,
+      sections: { about:true, position:true, preset:true, tx:true, rx:false, model:true, analysis:false, viz:false },
+      params: {
+        lat:null, lng:null, antennaHeight:10, power:50, txGain:2.15, frequency:145.000,
+        cableLoss:2, rxSensitivity:-120, rxGain:2.15, rxHeight:1.5,
+        model:'hata-rural', losMode:'terrain', maxRadius:30, numDirections:72,
+        numSamples:40, fadeMargin:6, vizMode:'polygon', fillOpacity:30
+      },
+      bands: AMATEUR_BANDS, models: MODEL_REGISTRY
+    };
+  },
+  computed: {
+    computedEirp() {
+      return (10 * Math.log10((this.params.power || 0.01) * 1000) + (this.params.txGain || 0) - (this.params.cableLoss || 0)).toFixed(1);
+    }
+  },
+  methods: {
+    loadMap() {
+      const key = this.apiKey.trim();
+      if (!key) { this.setStatus('Insira uma API Key valida.', 'error'); return; }
+      this.setStatus('Carregando Google Maps...');
+      const s = document.createElement('script');
+      s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) + '&callback=onMapReady';
+      s.async = true;
+      s.onerror = () => this.setStatus('Erro ao carregar. Verifique sua API Key.', 'error');
+      document.head.appendChild(s);
+    },
+    onMapReady() {
+      gMap = new google.maps.Map(document.getElementById('map'), {
+        center:{lat:-15.78,lng:-47.93}, zoom:5, mapTypeId:'terrain',
+        clickableIcons:false, streetViewControl:false, fullscreenControl:false,
+        mapTypeControl:true, mapTypeControlOptions:{style:google.maps.MapTypeControlStyle.HORIZONTAL_BAR,position:google.maps.ControlPosition.TOP_RIGHT}
+      });
+      elevationService = new google.maps.ElevationService();
+      gMap.addListener('click', e => {
+        if (!this.mapLocked) this.placeAntenna(e.latLng.lat(), e.latLng.lng());
+      });
+      this.mapLoaded = true;
+      this.setStatus('Mapa carregado! Clique no mapa para posicionar sua antena.', 'success');
+    },
+    toggleMapLock() {
+      this.mapLocked = !this.mapLocked;
+      if (gMarker) gMarker.setDraggable(!this.mapLocked);
+      this.setStatus(this.mapLocked ? 'Mapa travado — cliques nao movem a antena.' : 'Mapa destravado — clique para reposicionar.', this.mapLocked ? 'success' : '');
+    },
+    placeAntenna(lat, lng) {
+      this.params.lat = parseFloat(lat.toFixed(6));
+      this.params.lng = parseFloat(lng.toFixed(6));
+      const pos = {lat, lng};
+      if (gMarker) { gMarker.setPosition(pos); }
+      else {
+        gMarker = new google.maps.Marker({ position:pos, map:gMap, title:'Sua Antena', draggable:!this.mapLocked,
+          icon:{path:google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,scale:7,fillColor:'#0d6efd',fillOpacity:1,strokeColor:'#fff',strokeWeight:2} });
+        gMarker.addListener('dragend', e => {
+          if (!this.mapLocked) this.placeAntenna(e.latLng.lat(), e.latLng.lng());
+        });
+      }
+      gMap.panTo(pos);
+      if (gMap.getZoom() < 10) gMap.setZoom(10);
+      getElevation([pos]).then(el => { this.baseElevation = el[0]; this.setStatus('Antena em ' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ' | Elevacao: ' + el[0].toFixed(0) + ' m'); })
+        .catch(() => this.setStatus('Antena em ' + lat.toFixed(4) + ', ' + lng.toFixed(4)));
+    },
+    syncMarkerFromInput() {
+      const {lat, lng} = this.params;
+      if (lat != null && lng != null && !isNaN(lat) && !isNaN(lng)) this.placeAntenna(lat, lng);
+    },
+    applyBandPreset(b) {
+      this.selectedBand = b.id; this.params.frequency = b.freq; this.params.model = b.model; this.params.power = b.power;
+      this.setStatus('Preset aplicado: ' + b.name + ' (' + b.freq + ' MHz)');
+    },
+    setStatus(msg, type) { this.statusMsg = msg; this.statusType = type || ''; },
+    clearCoverage() {
+      if (gPolygon) { gPolygon.setMap(null); gPolygon = null; }
+      gSignalCircles.forEach(c => c.setMap(null));
+      gSignalCircles = [];
+      this.results = null; this.showLegend = false; this.lastCoverageData = null;
+      this.setStatus('Cobertura limpa.');
+    },
+    async calculateCoverage() {
+      const p = this.params;
+      if (p.lat == null || p.lng == null || isNaN(p.lat) || isNaN(p.lng)) { this.setStatus('Clique no mapa para definir a posicao da antena.', 'error'); return; }
+      if (!p.antennaHeight || p.antennaHeight <= 0) { this.setStatus('Altura da antena invalida.', 'error'); return; }
+      if (!p.frequency || p.frequency <= 0) { this.setStatus('Frequencia invalida.', 'error'); return; }
+      if (!p.power || p.power <= 0) { this.setStatus('Potencia invalida.', 'error'); return; }
+      const calcModel = PropagationModels[p.model];
+      if (!calcModel) { this.setStatus('Modelo desconhecido.', 'error'); return; }
+
+      this.calculating = true; this.progressPct = 0; this.clearCoverage();
+      const maxRM = p.maxRadius * 1000;
+      const eirp = 10 * Math.log10(p.power * 1000) + p.txGain - p.cableLoss;
+      const thresh = p.rxSensitivity - p.rxGain + p.fadeMargin;
+
+      this.setStatus('Obtendo elevacao da base...'); this.progressPct = 3;
+      let baseEl;
+      try { baseEl = (await getElevation([{lat:p.lat,lng:p.lng}]))[0]; }
+      catch(e) { this.setStatus('Erro Elevation API: ' + e.message, 'error'); this.calculating = false; return; }
+
+      const antAlt = baseEl + p.antennaHeight;
+      const covPts = [], heatPts = [], dirReach = [];
+      let losC = 0, modC = 0;
+      const t0 = performance.now();
+
+      for (let i = 0; i < p.numDirections; i += 4) {
+        const be = Math.min(i + 4, p.numDirections);
+        this.progressPct = Math.round(5 + (i / p.numDirections) * 90);
+        this.setStatus('Analisando direcoes ' + (i+1) + '-' + be + ' de ' + p.numDirections + '...');
+        const allPts = [], dm = [];
+        for (let d = i; d < be; d++) {
+          const brg = (d * 360) / p.numDirections, si = allPts.length;
+          for (let s = 1; s <= p.numSamples; s++) allPts.push(destinationPoint(p.lat, p.lng, brg, (s / p.numSamples) * maxRM));
+          dm.push({brg, si, cnt: p.numSamples});
+        }
+        let elevs;
+        try { elevs = await getElevBatch(allPts); } catch(e) { elevs = allPts.map(() => baseEl); }
+        for (const m of dm) {
+          let maxD = 0, sig = thresh, cut = 'radius';
+          for (let s = 0; s < m.cnt; s++) {
+            const dist = ((s+1) / p.numSamples) * maxRM;
+            if (!checkLoS(antAlt, dist, elevs[m.si+s], p.rxHeight, elevs, m.si, s, p.frequency, p.losMode)) { cut='los'; losC++; break; }
+            const rx = eirp - calcModel(dist, p.frequency, p.antennaHeight, p.rxHeight);
+            if (rx >= thresh) { heatPts.push({lat:allPts[m.si+s].lat,lng:allPts[m.si+s].lng,dbm:rx}); maxD=dist; sig=rx; }
+            else { cut='signal'; modC++; break; }
+          }
+          dirReach.push({brg:m.brg,dist:maxD,sig,cut});
+          covPts.push(maxD > 0 ? destinationPoint(p.lat,p.lng,m.brg,maxD) : destinationPoint(p.lat,p.lng,m.brg,maxRM*0.002));
+        }
+        if (i + 4 < p.numDirections) await sleep(150);
+      }
+
+      this.progressPct = 97; this.setStatus('Renderizando...');
+
+      if (p.vizMode==='polygon'||p.vizMode==='both') {
+        gPolygon = new google.maps.Polygon({
+          paths:covPts.map(pt=>({lat:pt.lat,lng:pt.lng})),
+          strokeColor:'#0d6efd',strokeOpacity:0.9,strokeWeight:2,
+          fillColor:'#0d6efd',fillOpacity:p.fillOpacity/100,map:gMap
+        });
+      }
+      if ((p.vizMode==='heatmap'||p.vizMode==='both') && heatPts.length) {
+        // Raio de cada circulo em metros (proporcional ao espacamento entre amostras)
+        const circleRadius = (maxRM / p.numSamples) * 0.6;
+        for (const h of heatPts) {
+          gSignalCircles.push(new google.maps.Circle({
+            center:{lat:h.lat,lng:h.lng},
+            radius: circleRadius,
+            fillColor: signalColor(h.dbm),
+            fillOpacity: p.fillOpacity / 100 + 0.15,
+            strokeWeight: 0,
+            clickable: false,
+            map: gMap
+          }));
+        }
+        this.showLegend = true;
+      }
+
+      const bounds = new google.maps.LatLngBounds();
+      covPts.forEach(pt => bounds.extend(pt)); bounds.extend({lat:p.lat,lng:p.lng});
+      gMap.fitBounds(bounds);
+
+      const elapsed = ((performance.now()-t0)/1000).toFixed(1);
+      const dists = dirReach.map(d=>d.dist);
+      const maxDist = (Math.max(...dists)/1000).toFixed(2);
+      const minDist = (Math.min(...dists.filter(d=>d>0))/1000||0).toFixed(2);
+      const avgDist = ((dists.reduce((a,b)=>a+b,0)/dists.length)/1000).toFixed(2);
+      let area = 0;
+      for (let i=0;i<covPts.length;i++){const j=(i+1)%covPts.length;area+=covPts[i].lat*covPts[j].lng;area-=covPts[j].lat*covPts[i].lng;}
+      area = (Math.abs(area)/2*111.32*111.32).toFixed(1);
+
+      const me = MODEL_REGISTRY.find(m=>m.id===p.model);
+      this.results = {eirp:eirp.toFixed(1),threshold:thresh.toFixed(1),maxDist,minDist,avgDist,area,losCutoffs:losC,modelCutoffs:modC,baseElev:baseEl.toFixed(0),modelName:me?me.name:p.model,elapsed};
+      this.lastCoverageData = {covPts,dirReach,antPos:{lat:p.lat,lng:p.lng},modelName:p.model};
+      this.progressPct=100; this.calculating=false;
+      this.setStatus('Cobertura calculada! Max: '+maxDist+' km | Media: '+avgDist+' km | Area: ~'+area+' km²','success');
+    },
+    exportKML() {
+      if (!this.lastCoverageData) { this.setStatus('Nenhuma cobertura para exportar.','error'); return; }
+      const {covPts,antPos,modelName} = this.lastCoverageData;
+      let coords = covPts.map(p=>p.lng.toFixed(6)+','+p.lat.toFixed(6)+',0').join('\n            ');
+      coords += '\n            '+covPts[0].lng.toFixed(6)+','+covPts[0].lat.toFixed(6)+',0';
+      const kml = '<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n  <name>RadioPlan BR - '+modelName+'</name>\n  <Style id="cov"><PolyStyle><color>5a00aaff</color></PolyStyle><LineStyle><color>ff00aaff</color><width>2</width></LineStyle></Style>\n  <Placemark><name>Antena TX</name><Point><coordinates>'+antPos.lng.toFixed(6)+','+antPos.lat.toFixed(6)+',0</coordinates></Point></Placemark>\n  <Placemark><name>Cobertura</name><styleUrl>#cov</styleUrl><Polygon><outerBoundaryIs><LinearRing><coordinates>\n            '+coords+'\n  </coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>\n</Document>\n</kml>';
+      const blob = new Blob([kml],{type:'application/vnd.google-earth.kml+xml'});
+      const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='radioplan_'+modelName+'.kml'; a.click(); URL.revokeObjectURL(a.href);
+      this.setStatus('KML exportado!','success');
+    }
+  },
+  mounted() { window.onMapReady = () => this.onMapReady(); }
+}).mount('#app');
+</script>
+</body>
+</html>
