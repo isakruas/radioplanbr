@@ -23,6 +23,36 @@ body{overflow:hidden}
 .rpt-reach{font-size:.7rem;font-weight:600;padding:1px 6px;border-radius:4px}
 .rpt-reach-ok{background:rgba(0,200,83,.15);color:#00c853}
 .rpt-reach-no{background:rgba(213,0,0,.15);color:#d50000}
+@media (max-width: 767px) {
+  #app { flex-direction: column-reverse !important; }
+  .sidebar {
+    width: 100% !important; min-width: 100% !important;
+    height: auto !important; max-height: 55vh;
+    border-right: none !important; border-top: 1px solid var(--bs-border-color);
+  }
+  .sidebar.sidebar-collapsed { max-height: 0; overflow: hidden; padding: 0; border: none; }
+  .map-wrap { flex: 1; min-height: 45vh; }
+  .legend-box { bottom: 8px; right: 8px; min-width: 160px; font-size: .75rem; }
+  .mobile-toggle {
+    display: flex !important;
+    position: absolute; bottom: 12px; left: 12px; z-index: 6;
+    width: 44px; height: 44px; border-radius: 50%;
+    align-items: center; justify-content: center;
+    background: var(--bs-primary); color: #fff; border: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,.4); font-size: 1.2rem;
+  }
+  .mobile-geo {
+    display: flex !important;
+    position: absolute; bottom: 64px; left: 12px; z-index: 6;
+    width: 44px; height: 44px; border-radius: 50%;
+    align-items: center; justify-content: center;
+    background: var(--bs-body-bg); color: var(--bs-body-color); border: 1px solid var(--bs-border-color);
+    box-shadow: 0 2px 8px rgba(0,0,0,.3); font-size: 1.2rem;
+  }
+}
+@media (min-width: 768px) {
+  .mobile-toggle, .mobile-geo { display: none !important; }
+}
 </style>
 </head>
 <body>
@@ -32,7 +62,7 @@ body{overflow:hidden}
   <!-- ============================================ -->
   <!-- SIDEBAR                                      -->
   <!-- ============================================ -->
-  <aside class="sidebar bg-body">
+  <aside class="sidebar bg-body" :class="{'sidebar-collapsed': !sidebarOpen}">
 
     <!-- Header -->
     <div class="px-3 py-3 border-bottom d-flex align-items-center gap-2">
@@ -108,6 +138,9 @@ body{overflow:hidden}
               <button v-if="mapLoaded" @click="toggleMapLock" class="btn btn-sm w-100 mt-2" :class="mapLocked ? 'btn-warning' : 'btn-outline-secondary'">
                 <i class="bi me-1" :class="mapLocked ? 'bi-lock-fill' : 'bi-unlock'"></i>
                 {{ mapLocked ? 'Mapa travado — clique para destravar' : 'Travar posicao (evita cliques acidentais)' }}
+              </button>
+              <button v-if="mapLoaded" @click="useMyLocation" class="btn btn-outline-primary btn-sm w-100 mt-1">
+                <i class="bi bi-crosshair me-1"></i>Usar minha localizacao
               </button>
             </div>
           </div>
@@ -556,6 +589,13 @@ body{overflow:hidden}
     </div>
 
     <div id="map"></div>
+
+    <button class="mobile-toggle" @click="sidebarOpen=!sidebarOpen" :title="sidebarOpen?'Esconder painel':'Mostrar painel'">
+      <i class="bi" :class="sidebarOpen?'bi-chevron-down':'bi-chevron-up'"></i>
+    </button>
+    <button class="mobile-geo" @click="useMyLocation" title="Usar minha localizacao" v-if="mapLoaded">
+      <i class="bi bi-crosshair"></i>
+    </button>
 
     <!-- Legenda -->
     <div v-if="showLegend" class="card legend-box shadow">
@@ -1015,6 +1055,7 @@ const MODEL_REGISTRY = [
 // ================================================
 
 const AMATEUR_BANDS = [
+  { id:'160m', name:'160 metros', freq:1.850, model:'hf-skywave', power:100 },
   { id:'80m', name:'80 metros', freq:3.650,    model:'hf-skywave',   power:100 },
   { id:'40m', name:'40 metros', freq:7.100,    model:'hf-skywave',   power:100 },
   { id:'20m', name:'20 metros', freq:14.200,   model:'hf-skywave',   power:100 },
@@ -1118,6 +1159,7 @@ Vue.createApp({
     const savedKey = localStorage.getItem('radioplanbr-apikey');
     const savedRepeaters = JSON.parse(localStorage.getItem('radioplanbr-repeaters') || '[]');
     return {
+      sidebarOpen: true,
       apiKey: savedKey || 'AIzaSyBapQtWVbQQR3AxpvfkoA1aPprAr4EvO7c', mapLoaded: false, mapLocked: false,
       baseElevation: null, calculating: false, progressPct: 0,
       statusMsg: 'Insira sua API Key do Google Maps para comecar.', statusType: '',
@@ -1207,6 +1249,15 @@ Vue.createApp({
       this.updateRepeaterMarkers();
       this.setStatus('Mapa carregado! Clique no mapa para posicionar sua antena.', 'success');
     },
+    useMyLocation() {
+      if (!navigator.geolocation) { this.setStatus('Geolocalizacao nao suportada.', 'error'); return; }
+      this.setStatus('Obtendo localizacao...');
+      navigator.geolocation.getCurrentPosition(
+        pos => this.placeAntenna(pos.coords.latitude, pos.coords.longitude),
+        err => this.setStatus('Erro de geolocalizacao: ' + err.message, 'error'),
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    },
     toggleMapLock() {
       this.mapLocked = !this.mapLocked;
       if (gMarker) gMarker.setDraggable(!this.mapLocked);
@@ -1264,6 +1315,7 @@ Vue.createApp({
       if (!calcModel) { this.setStatus('Modelo desconhecido.', 'error'); return; }
 
       this.calculating = true; this.progressPct = 0; this.clearCoverage();
+      if (window.innerWidth < 768) this.sidebarOpen = false;
       let maxRM = p.maxRadius * 1000;
       // HF skywave precisa de raio muito maior que VHF/UHF:
       //   - freq <= 10 MHz (NVIS/80m/40m): 600 km — propagacao quase vertical
