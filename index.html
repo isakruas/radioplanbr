@@ -167,6 +167,7 @@ body{overflow:hidden}
                   <option value="omni">Omnidirecional</option>
                   <option value="directional">Direcional (Yagi, Parabolica)</option>
                   <option value="cardioid">Cardioide</option>
+                  <option value="custom">Diagrama Personalizado (Datasheet)</option>
                 </select>
               </div>
               <div class="row g-2 mb-2" v-show="params.antennaType !== 'omni'">
@@ -183,11 +184,25 @@ body{overflow:hidden}
                   <div class="form-text">Tipico: Yagi=40-60, Dish=5-15</div>
                 </div>
               </div>
-              <div class="mb-2" v-show="params.antennaType !== 'omni'">
+              <div class="mb-2" v-show="params.antennaType !== 'omni' && params.antennaType !== 'custom'">
                 <label class="form-label small mb-1">Relacao Frente/Costas (dB)</label>
                 <input type="number" class="form-control form-control-sm"
                        v-model.number="params.antennaFBR" min="5" max="50" step="1">
                 <div class="form-text">Yagi=15-25, Parabolica=30-40</div>
+              </div>
+              <div class="mb-2" v-show="params.antennaType === 'custom'">
+                <label class="form-label small mb-1">Diagrama de Irradiacao (Datasheet)</label>
+                <textarea class="form-control form-control-sm" rows="6" v-model="customPatternRaw"
+                  placeholder="Cole aqui a tabela do datasheet:&#10;GRAUS  dB  E/Emax&#10;0  0.0  1.000&#10;1  -0.1  0.989&#10;..."></textarea>
+                <button class="btn btn-outline-primary btn-sm mt-1" @click="parseCustomPattern">
+                  <i class="bi bi-upload me-1"></i>Importar Diagrama
+                </button>
+                <div v-if="customPatternLoaded" class="alert alert-success py-1 px-2 mt-1 mb-0 small">
+                  <i class="bi bi-check-circle-fill me-1"></i>{{ customPattern.length }} pontos carregados
+                </div>
+                <div v-if="customPatternError" class="alert alert-danger py-1 px-2 mt-1 mb-0 small">
+                  <i class="bi bi-exclamation-triangle-fill me-1"></i>{{ customPatternError }}
+                </div>
               </div>
               <div class="mb-2">
                 <label class="form-label small mb-1">Frequencia (MHz)</label>
@@ -633,13 +648,38 @@ const PropagationModels = {
 // PADRAO DE IRRADIACAO DE ANTENA
 // ================================================
 
-function antennaPatternGain(type, maxGain, bearing, azimuth, beamwidth, fbr) {
+function antennaPatternGain(type, maxGain, bearing, azimuth, beamwidth, fbr, customPattern) {
   if (type === 'omni') return maxGain;
 
   // Diferenca angular normalizada para [-180, 180]
   let delta = bearing - azimuth;
   while (delta > 180) delta -= 360;
   while (delta < -180) delta += 360;
+
+  if (type === 'custom' && customPattern && customPattern.length >= 2) {
+    // Angulo relativo ao azimute, normalizado para [0, 360)
+    let angle = delta;
+    while (angle < 0) angle += 360;
+    while (angle >= 360) angle -= 360;
+    // Interpolacao linear entre pontos do array
+    let lower = customPattern[customPattern.length - 1];
+    let upper = customPattern[0];
+    for (let i = 0; i < customPattern.length; i++) {
+      if (customPattern[i].deg <= angle) lower = customPattern[i];
+      if (customPattern[i].deg >= angle) { upper = customPattern[i]; break; }
+    }
+    let attnDb;
+    if (lower.deg === upper.deg) {
+      attnDb = lower.db;
+    } else {
+      let span = upper.deg - lower.deg;
+      if (span < 0) span += 360;
+      let frac = angle - lower.deg;
+      if (frac < 0) frac += 360;
+      attnDb = lower.db + (upper.db - lower.db) * (frac / span);
+    }
+    return maxGain + attnDb; // attnDb <= 0
+  }
 
   if (type === 'directional') {
     // Modelo ITU-R F.1336 simplificado (envelope gaussiano)
@@ -746,7 +786,7 @@ async function getElevBatch(pts) {
 // ================================================
 
 // Objetos Google Maps fora do Vue (nao-reativos) para evitar Proxy
-let gMap = null, gMarker = null, gPolygon = null, gSignalCircles = [], gAzimuthLine = null, gBeamCone = null, gRepeaterMarkers = [];
+let gMap = null, gMarker = null, gPolygon = null, gSignalCircles = [], gAzimuthLine = null, gPatternOverlay = null, gRepeaterMarkers = [];
 
 // Cor fixa por faixa de sinal (nao muda com zoom)
 function signalColor(dbm) {
@@ -779,7 +819,11 @@ Vue.createApp({
       showRepeaterForm: false,
       placingRepeater: false,
       newRepeater: {name:'', lat:null, lng:null, freq:145.000, shift:'-0.600', tone:'88.5'},
-      bands: AMATEUR_BANDS, models: MODEL_REGISTRY
+      bands: AMATEUR_BANDS, models: MODEL_REGISTRY,
+      customPattern: JSON.parse(localStorage.getItem('radioplanbr-custom-pattern') || '[]'),
+      customPatternLoaded: JSON.parse(localStorage.getItem('radioplanbr-custom-pattern') || '[]').length >= 36,
+      customPatternRaw: '',
+      customPatternError: ''
     };
   },
   computed: {
@@ -797,6 +841,36 @@ Vue.createApp({
       s.async = true; s.defer = true;
       s.onerror = () => this.setStatus('Erro ao carregar. Verifique sua API Key.', 'error');
       document.head.appendChild(s);
+    },
+    parseCustomPattern() {
+      this.customPatternError = '';
+      this.customPatternLoaded = false;
+      const raw = this.customPatternRaw.trim();
+      if (!raw) { this.customPatternError = 'Cole os dados do datasheet no campo acima.'; return; }
+      const lines = raw.split(/\r?\n/);
+      const points = [];
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (/[a-zA-Z]{2,}/.test(trimmed) && !/^\d/.test(trimmed)) continue; // skip header lines
+        const parts = trimmed.split(/[\s;,]+/).map(Number);
+        if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) continue;
+        const deg = Math.round(parts[0]) % 360;
+        const db = parts[1];
+        points.push({ deg: deg < 0 ? deg + 360 : deg, db });
+      }
+      if (points.length < 36) {
+        this.customPatternError = 'Minimo 36 pontos necessarios. Encontrados: ' + points.length + '.';
+        return;
+      }
+      // Normalize: make max dB = 0
+      const maxDb = Math.max(...points.map(p => p.db));
+      for (const p of points) p.db -= maxDb;
+      // Sort by degree
+      points.sort((a, b) => a.deg - b.deg);
+      this.customPattern = points;
+      this.customPatternLoaded = true;
+      localStorage.setItem('radioplanbr-custom-pattern', JSON.stringify(points));
     },
     onMapReady() {
       gMap = new google.maps.Map(document.getElementById('map'), {
@@ -860,7 +934,7 @@ Vue.createApp({
     clearCoverage() {
       if (gPolygon) { gPolygon.setMap(null); gPolygon = null; }
       if (gAzimuthLine) { gAzimuthLine.setMap(null); gAzimuthLine = null; }
-      if (gBeamCone) { gBeamCone.setMap(null); gBeamCone = null; }
+      if (gPatternOverlay) { gPatternOverlay.setMap(null); gPatternOverlay = null; }
       gSignalCircles.forEach(c => c.setMap(null));
       gSignalCircles = [];
       this.results = null; this.showLegend = false; this.lastCoverageData = null;
@@ -909,7 +983,7 @@ Vue.createApp({
           for (let s = 0; s < m.cnt; s++) {
             const dist = ((s+1) / p.numSamples) * maxRM;
             if (!checkLoS(antAlt, dist, elevs[m.si+s], p.rxHeight, elevs, m.si, s, p.frequency, p.losMode)) { cut='los'; losC++; break; }
-            const txGainDir = antennaPatternGain(p.antennaType, p.txGain, m.brg, p.antennaAzimuth, p.antennaBeamwidth, p.antennaFBR);
+            const txGainDir = antennaPatternGain(p.antennaType, p.txGain, m.brg, p.antennaAzimuth, p.antennaBeamwidth, p.antennaFBR, this.customPattern);
             const rx = (eirpBase + txGainDir) - calcModel(dist, p.frequency, p.antennaHeight, p.rxHeight);
             if (rx >= thresh) { heatPts.push({lat:allPts[m.si+s].lat,lng:allPts[m.si+s].lng,dbm:rx}); maxD=dist; sig=rx; }
             else { cut='signal'; modC++; break; }
@@ -968,9 +1042,10 @@ Vue.createApp({
     },
     updateAzimuthLine() {
       if (gAzimuthLine) { gAzimuthLine.setMap(null); gAzimuthLine = null; }
-      if (gBeamCone) { gBeamCone.setMap(null); gBeamCone = null; }
+      if (gPatternOverlay) { gPatternOverlay.setMap(null); gPatternOverlay = null; }
       const p = this.params;
-      if (!this.mapLoaded || !gMap || p.antennaType === 'omni' || p.lat == null || p.lng == null) return;
+      if (!this.mapLoaded || !gMap || p.lat == null || p.lng == null) return;
+      if (p.antennaType === 'omni') return;
       const lineDist = p.maxRadius * 1000 * 0.2;
       const endPt = destinationPoint(p.lat, p.lng, p.antennaAzimuth, lineDist);
       gAzimuthLine = new google.maps.Polyline({
@@ -979,23 +1054,26 @@ Vue.createApp({
         icons: [{icon:{path:google.maps.SymbolPath.FORWARD_CLOSED_ARROW,scale:4,fillColor:'#ff4081',fillOpacity:1,strokeColor:'#fff',strokeWeight:1},offset:'100%'}],
         map: gMap
       });
-      // Desenhar cone de abertura para antena direcional
-      if (p.antennaType === 'directional' && p.antennaBeamwidth > 0) {
-        const halfBW = p.antennaBeamwidth / 2;
-        const arcSteps = Math.max(Math.ceil(p.antennaBeamwidth / 2), 12);
-        const conePath = [{lat:p.lat, lng:p.lng}];
-        for (let i = 0; i <= arcSteps; i++) {
-          const angle = p.antennaAzimuth - halfBW + (p.antennaBeamwidth * i / arcSteps);
-          conePath.push(destinationPoint(p.lat, p.lng, angle, lineDist));
-        }
-        conePath.push({lat:p.lat, lng:p.lng});
-        gBeamCone = new google.maps.Polygon({
-          paths: conePath,
-          strokeColor: '#ff4081', strokeOpacity: 0.5, strokeWeight: 1,
-          fillColor: '#ff4081', fillOpacity: 0.12,
-          clickable: false, map: gMap
-        });
+      // Desenhar diagrama de irradiacao real no mapa (todos os tipos direcionais)
+      if (p.antennaType === 'custom' && !this.customPatternLoaded) return;
+      const patPath = [];
+      const maxGain = p.txGain;
+      for (let deg = 0; deg < 360; deg++) {
+        const bearing = deg;
+        const gain = antennaPatternGain(p.antennaType, maxGain, bearing, p.antennaAzimuth, p.antennaBeamwidth, p.antennaFBR, this.customPattern);
+        // Converter ganho para raio: ganho maximo = raio maximo, ganho minimo = raio minimo
+        // Usar escala linear de potencia (dB -> linear)
+        const relDb = gain - maxGain; // sempre <= 0
+        const linear = Math.pow(10, relDb / 10);
+        const r = lineDist * Math.max(linear, 0.01);
+        patPath.push(destinationPoint(p.lat, p.lng, bearing, r));
       }
+      gPatternOverlay = new google.maps.Polygon({
+        paths: patPath,
+        strokeColor: '#00b4ff', strokeOpacity: 0.8, strokeWeight: 1.5,
+        fillColor: '#00b4ff', fillOpacity: 0.15,
+        clickable: false, map: gMap
+      });
     },
     // --- Repetidoras ---
     addRepeater() {
@@ -1067,7 +1145,7 @@ Vue.createApp({
       const blob = new Blob([kml],{type:'application/vnd.google-earth.kml+xml'});
       const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='radioplan_'+modelName+'.kml'; a.click(); URL.revokeObjectURL(a.href);
       this.setStatus('KML exportado!','success');
-    }
+    },
   },
   watch: {
     params: {
@@ -1078,9 +1156,15 @@ Vue.createApp({
     'params.antennaType'() { this.updateAzimuthLine(); },
     'params.antennaAzimuth'() { this.updateAzimuthLine(); },
     'params.antennaBeamwidth'() { this.updateAzimuthLine(); },
+    'params.antennaFBR'() { this.updateAzimuthLine(); },
+    'params.txGain'() { this.updateAzimuthLine(); },
     'params.lat'() { this.updateAzimuthLine(); },
     'params.lng'() { this.updateAzimuthLine(); },
-    'params.maxRadius'() { this.updateAzimuthLine(); }
+    'params.maxRadius'() { this.updateAzimuthLine(); },
+    customPattern(v) {
+      localStorage.setItem('radioplanbr-custom-pattern', JSON.stringify(v));
+      this.updateAzimuthLine();
+    }
   },
   mounted() { window.onMapReady = () => this.onMapReady(); }
 }).mount('#app');
