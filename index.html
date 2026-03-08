@@ -346,6 +346,15 @@ body{overflow:hidden}
                 </div>
               </div>
 
+              <div v-if="!showRepeaterForm" class="d-flex gap-1 mb-2">
+                <button class="btn btn-outline-secondary btn-sm flex-fill" @click="exportRepeaters" :disabled="repeaters.length===0">
+                  <i class="bi bi-download me-1"></i>Exportar
+                </button>
+                <label class="btn btn-outline-secondary btn-sm flex-fill mb-0">
+                  <i class="bi bi-upload me-1"></i>Importar
+                  <input type="file" accept=".json" @change="importRepeaters" hidden>
+                </label>
+              </div>
               <button v-if="!showRepeaterForm" class="btn btn-outline-danger btn-sm w-100" @click="showRepeaterForm=true">
                 <i class="bi bi-plus-lg me-1"></i>Adicionar Repetidora
               </button>
@@ -1145,6 +1154,41 @@ Vue.createApp({
       const blob = new Blob([kml],{type:'application/vnd.google-earth.kml+xml'});
       const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='radioplan_'+modelName+'.kml'; a.click(); URL.revokeObjectURL(a.href);
       this.setStatus('KML exportado!','success');
+    },
+    exportRepeaters() {
+      if (!this.repeaters.length) return;
+      const data = this.repeaters.map(({reachable, active, id, ...rest}) => rest);
+      const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'repetidoras.json'; a.click(); URL.revokeObjectURL(a.href);
+      this.setStatus('Repetidoras exportadas (' + data.length + ').', 'success');
+    },
+    importRepeaters(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          if (!Array.isArray(data)) throw new Error('O arquivo deve conter um array JSON.');
+          const valid = data.filter(item => typeof item.lat === 'number' && typeof item.lng === 'number');
+          if (!valid.length) throw new Error('Nenhuma repetidora valida encontrada (lat/lng numericos obrigatorios).');
+          const base = Date.now();
+          valid.forEach((item, i) => {
+            this.repeaters.push({
+              name: item.name || '', lat: item.lat, lng: item.lng,
+              freq: item.freq || 145, shift: item.shift || '-0.600', tone: item.tone || '',
+              id: base + i, active: true, reachable: null
+            });
+          });
+          this.saveRepeaters();
+          this.updateRepeaterMarkers();
+          this.setStatus(valid.length + ' repetidora(s) importada(s).', 'success');
+        } catch (err) {
+          this.setStatus('Erro ao importar: ' + err.message, 'error');
+        }
+      };
+      reader.readAsText(file);
+      event.target.value = '';
     },
   },
   watch: {

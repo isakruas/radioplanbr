@@ -4,13 +4,53 @@ Ferramenta web de planejamento de cobertura RF para radioamadores brasileiros. E
 
 ## Funcionalidades
 
-- **Modelos de propagacao**: Friis, Okumura-Hata (urbano, suburbano, rural), COST-231, ECC-33, Ericsson
-- **Analise de linha de visada (LoS)** com opcao de zona de Fresnel
-- **Presets de faixas brasileiras**: 80m, 40m, 20m, 15m, 10m, 6m, 2m, 70cm, 23cm
-- **Visualizacao**: poligono de cobertura, mapa de calor ou combinado
-- **Elevacao real do terreno** via Google Maps Elevation API
-- **Exportacao KML** para uso no Google Earth
-- **Metricas**: alcance maximo, alcance medio, area de cobertura, niveis de sinal
+### Modelos de propagacao
+- Friis (espaco livre)
+- Okumura-Hata (urbano, suburbano, rural)
+- COST-231
+- ECC-33
+- Ericsson
+
+### Antenas
+- **Omnidirecional** — irradiacao uniforme em 360 graus
+- **Direcional** — Yagi ou Parabolica, com ganho e abertura configuraveis
+- **Cardioide** — padrao cardioide com razao frente-costas ajustavel
+- **Custom** — importacao de diagrama de irradiacao a partir de arquivo texto (angulo x ganho)
+- Diagrama de irradiacao plotado diretamente no mapa, com rotacao por azimute
+
+### Analise de Linha de Visada (LoS)
+- Perfil de elevacao entre transmissor e ponto de interesse
+- Zona de Fresnel com raio calculado para a frequencia selecionada
+
+### Presets de faixas brasileiras
+80m, 40m, 20m, 15m, 10m, 6m, 2m, 70cm, 23cm — com frequencias e modelos pre-configurados
+
+### Visualizacao
+- Poligono de cobertura
+- Mapa de calor (heatmap)
+- Combinado (poligono + mapa de calor)
+
+### Terreno e mapa
+- Elevacao real do terreno via Google Maps Elevation API
+- Mapa inicializa em modo terrain (curvas de nivel)
+
+### Exportacao
+- **KML** para uso no Google Earth
+- **Repetidoras (JSON)** — exportar e importar lista de repetidoras para compartilhamento
+
+### Repetidoras
+- Cadastro de repetidoras com nome, frequencia, shift e tom CTCSS
+- Verificacao automatica de alcancabilidade (dentro ou fora do poligono de cobertura)
+- Importar/exportar repetidoras em formato JSON
+- Persistencia via localStorage
+
+### Metricas
+- Alcance maximo e medio
+- Area de cobertura estimada
+- Niveis de sinal
+
+### Persistencia
+- Configuracoes e repetidoras salvas automaticamente no localStorage do navegador
 
 ## Como usar
 
@@ -18,7 +58,7 @@ Ferramenta web de planejamento de cobertura RF para radioamadores brasileiros. E
 2. Clique em **Carregar** para inicializar o mapa (a API Key ja esta configurada)
 3. Clique no mapa para posicionar a antena
 4. Ajuste os parametros de transmissao (potencia, frequencia, altura, ganho, etc.)
-5. Selecione o modelo de propagacao adequado
+5. Selecione o tipo de antena e o modelo de propagacao adequado
 6. Clique em **Calcular Cobertura**
 7. Analise os resultados no mapa e exporte em KML se desejar
 
