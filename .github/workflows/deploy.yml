@@ -24,6 +24,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Inject commit hash
+        run: sed -i "s|<span class=\"ms-2 opacity-50\" id=\"app-version\"></span>|<span class=\"ms-2 opacity-50\" id=\"app-version\">${GITHUB_SHA::7}</span>|" index.html
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
