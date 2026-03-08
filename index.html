@@ -20,6 +20,9 @@ body{overflow:hidden}
 .eirp-box{background:rgba(13,110,253,0.1);border:1px solid rgba(13,110,253,0.25)}
 .band-btn{text-align:left}
 .band-btn.active{border-color:var(--bs-primary)!important;background:rgba(13,110,253,0.15)!important;color:var(--bs-primary)!important}
+.rpt-reach{font-size:.7rem;font-weight:600;padding:1px 6px;border-radius:4px}
+.rpt-reach-ok{background:rgba(0,200,83,.15);color:#00c853}
+.rpt-reach-no{background:rgba(213,0,0,.15);color:#d50000}
 </style>
 </head>
 <body>
@@ -246,6 +249,91 @@ body{overflow:hidden}
                   <div class="form-text">HT=1.5 | Movel=1 | Base=10</div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ========== REPETIDORAS ========== -->
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button class="accordion-button py-2 small fw-semibold" :class="{collapsed:!sections.repeaters}" @click="sections.repeaters=!sections.repeaters" type="button">
+              <i class="bi bi-pin-map-fill me-2 text-danger"></i> Repetidoras
+              <span v-if="repeaters.length" class="badge bg-secondary ms-2">{{ repeaters.length }}</span>
+            </button>
+          </h2>
+          <div v-show="sections.repeaters">
+            <div class="accordion-body py-2">
+              <p class="form-text mt-0 mb-2">Cadastre repetidoras conhecidas para verificar se o sinal da sua estacao as alcanca.</p>
+
+              <!-- Lista de repetidoras -->
+              <div v-for="(rpt, idx) in repeaters" :key="rpt.id" class="border rounded-2 p-2 mb-2 small">
+                <div class="d-flex justify-content-between align-items-start">
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="form-check form-switch mb-0">
+                      <input class="form-check-input" type="checkbox" v-model="rpt.active" @change="updateRepeaterMarkers">
+                    </div>
+                    <div>
+                      <div class="fw-semibold">{{ rpt.name || 'Repetidora ' + (idx+1) }}</div>
+                      <div class="text-body-secondary" style="font-size:.75rem">{{ rpt.freq }} MHz | Shift: {{ rpt.shift }} MHz<span v-if="rpt.tone"> | Tom: {{ rpt.tone }} Hz</span></div>
+                      <div class="text-body-secondary" style="font-size:.75rem">{{ rpt.lat?.toFixed(4) }}, {{ rpt.lng?.toFixed(4) }}</div>
+                    </div>
+                  </div>
+                  <div class="d-flex align-items-center gap-1">
+                    <span v-if="rpt.reachable===true" class="rpt-reach rpt-reach-ok">Alcancavel</span>
+                    <span v-else-if="rpt.reachable===false" class="rpt-reach rpt-reach-no">Fora de alcance</span>
+                    <button class="btn btn-outline-danger btn-sm py-0 px-1" @click="removeRepeater(idx)" title="Remover">
+                      <i class="bi bi-x-lg" style="font-size:.7rem"></i>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Formulario adicionar repetidora -->
+              <div v-if="showRepeaterForm" class="border rounded-2 p-2 mb-2 bg-body-tertiary">
+                <div class="mb-2">
+                  <label class="form-label small mb-1">Nome / Indicativo</label>
+                  <input type="text" class="form-control form-control-sm" v-model="newRepeater.name" placeholder="PY2RJ - Jaragua">
+                </div>
+                <div class="row g-2 mb-2">
+                  <div class="col-6">
+                    <label class="form-label small mb-1">Latitude</label>
+                    <input type="number" step="any" class="form-control form-control-sm" v-model.number="newRepeater.lat" placeholder="-23.4567">
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label small mb-1">Longitude</label>
+                    <input type="number" step="any" class="form-control form-control-sm" v-model.number="newRepeater.lng" placeholder="-46.1234">
+                  </div>
+                </div>
+                <div class="form-text mb-2">
+                  <button class="btn btn-outline-secondary btn-sm py-0 px-2" @click="startRepeaterPlacement" :class="{'btn-warning':placingRepeater}" :disabled="!mapLoaded">
+                    <i class="bi bi-cursor-fill me-1"></i>{{ placingRepeater ? 'Clique no mapa...' : 'Clicar no mapa' }}
+                  </button>
+                </div>
+                <div class="row g-2 mb-2">
+                  <div class="col-4">
+                    <label class="form-label small mb-1">Freq. (MHz)</label>
+                    <input type="number" step="any" class="form-control form-control-sm" v-model.number="newRepeater.freq">
+                  </div>
+                  <div class="col-4">
+                    <label class="form-label small mb-1">Shift (MHz)</label>
+                    <input type="text" class="form-control form-control-sm" v-model="newRepeater.shift" placeholder="-0.600">
+                  </div>
+                  <div class="col-4">
+                    <label class="form-label small mb-1">Tom CTCSS</label>
+                    <input type="text" class="form-control form-control-sm" v-model="newRepeater.tone" placeholder="88.5">
+                  </div>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-success btn-sm flex-fill" @click="addRepeater" :disabled="!newRepeater.lat||!newRepeater.lng">
+                    <i class="bi bi-plus-lg me-1"></i>Salvar
+                  </button>
+                  <button class="btn btn-outline-secondary btn-sm" @click="cancelRepeaterForm">Cancelar</button>
+                </div>
+              </div>
+
+              <button v-if="!showRepeaterForm" class="btn btn-outline-danger btn-sm w-100" @click="showRepeaterForm=true">
+                <i class="bi bi-plus-lg me-1"></i>Adicionar Repetidora
+              </button>
             </div>
           </div>
         </div>
@@ -658,7 +746,7 @@ async function getElevBatch(pts) {
 // ================================================
 
 // Objetos Google Maps fora do Vue (nao-reativos) para evitar Proxy
-let gMap = null, gMarker = null, gPolygon = null, gSignalCircles = [], gAzimuthLine = null, gBeamCone = null;
+let gMap = null, gMarker = null, gPolygon = null, gSignalCircles = [], gAzimuthLine = null, gBeamCone = null, gRepeaterMarkers = [];
 
 // Cor fixa por faixa de sinal (nao muda com zoom)
 function signalColor(dbm) {
@@ -671,18 +759,26 @@ function signalColor(dbm) {
 
 Vue.createApp({
   data() {
+    const defaultParams = {
+      lat:null, lng:null, antennaHeight:10, power:50, txGain:2.15, antennaType:'omni', antennaAzimuth:0, antennaBeamwidth:60, frequency:145.000,
+      antennaFBR:25, cableLoss:2, polLoss:0, rxSensitivity:-120, rxGain:2.15, rxHeight:1.5,
+      model:'hata-rural', losMode:'terrain', maxRadius:30, numDirections:72,
+      numSamples:40, fadeMargin:6, vizMode:'polygon', fillOpacity:30
+    };
+    const savedParams = JSON.parse(localStorage.getItem('radioplanbr-params') || 'null');
+    const savedKey = localStorage.getItem('radioplanbr-apikey');
+    const savedRepeaters = JSON.parse(localStorage.getItem('radioplanbr-repeaters') || '[]');
     return {
-      apiKey: 'AIzaSyBapQtWVbQQR3AxpvfkoA1aPprAr4EvO7c', mapLoaded: false, mapLocked: false,
+      apiKey: savedKey || 'AIzaSyBapQtWVbQQR3AxpvfkoA1aPprAr4EvO7c', mapLoaded: false, mapLocked: false,
       baseElevation: null, calculating: false, progressPct: 0,
       statusMsg: 'Insira sua API Key do Google Maps para comecar.', statusType: '',
       showLegend: false, results: null, lastCoverageData: null, selectedBand: null,
-      sections: { about:true, position:true, preset:true, tx:true, rx:false, model:true, analysis:false, viz:false },
-      params: {
-        lat:null, lng:null, antennaHeight:10, power:50, txGain:2.15, antennaType:'omni', antennaAzimuth:0, antennaBeamwidth:60, frequency:145.000,
-        antennaFBR:25, cableLoss:2, polLoss:0, rxSensitivity:-120, rxGain:2.15, rxHeight:1.5,
-        model:'hata-rural', losMode:'terrain', maxRadius:30, numDirections:72,
-        numSamples:40, fadeMargin:6, vizMode:'polygon', fillOpacity:30
-      },
+      sections: { about:true, position:true, preset:true, tx:true, rx:false, repeaters:false, model:true, analysis:false, viz:false },
+      params: {...defaultParams, ...savedParams},
+      repeaters: savedRepeaters.map(r => ({...r, reachable: null})),
+      showRepeaterForm: false,
+      placingRepeater: false,
+      newRepeater: {name:'', lat:null, lng:null, freq:145.000, shift:'-0.600', tone:'88.5'},
       bands: AMATEUR_BANDS, models: MODEL_REGISTRY
     };
   },
@@ -697,7 +793,7 @@ Vue.createApp({
       if (!key) { this.setStatus('Insira uma API Key valida.', 'error'); return; }
       this.setStatus('Carregando Google Maps...');
       const s = document.createElement('script');
-      s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) + '&loading=async&callback=onMapReady';
+      s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) + '&libraries=geometry&loading=async&callback=onMapReady';
       s.async = true; s.defer = true;
       s.onerror = () => this.setStatus('Erro ao carregar. Verifique sua API Key.', 'error');
       document.head.appendChild(s);
@@ -710,9 +806,22 @@ Vue.createApp({
       });
       elevationService = new google.maps.ElevationService();
       gMap.addListener('click', e => {
+        if (this.placingRepeater) {
+          this.newRepeater.lat = parseFloat(e.latLng.lat().toFixed(6));
+          this.newRepeater.lng = parseFloat(e.latLng.lng().toFixed(6));
+          this.placingRepeater = false;
+          this.setStatus('Posicao da repetidora definida: ' + this.newRepeater.lat + ', ' + this.newRepeater.lng);
+          return;
+        }
         if (!this.mapLocked) this.placeAntenna(e.latLng.lat(), e.latLng.lng());
       });
       this.mapLoaded = true;
+      // Restaurar antena salva no localStorage
+      if (this.params.lat != null && this.params.lng != null && !isNaN(this.params.lat) && !isNaN(this.params.lng)) {
+        this.placeAntenna(this.params.lat, this.params.lng);
+      }
+      // Restaurar marcadores de repetidoras
+      this.updateRepeaterMarkers();
       this.setStatus('Mapa carregado! Clique no mapa para posicionar sua antena.', 'success');
     },
     toggleMapLock() {
@@ -755,6 +864,7 @@ Vue.createApp({
       gSignalCircles.forEach(c => c.setMap(null));
       gSignalCircles = [];
       this.results = null; this.showLegend = false; this.lastCoverageData = null;
+      this.repeaters.forEach(r => r.reachable = null);
       this.setStatus('Cobertura limpa.');
     },
     async calculateCoverage() {
@@ -852,6 +962,7 @@ Vue.createApp({
       const me = MODEL_REGISTRY.find(m=>m.id===p.model);
       this.results = {eirp:eirp.toFixed(1),threshold:thresh.toFixed(1),maxDist,minDist,avgDist,area,losCutoffs:losC,modelCutoffs:modC,baseElev:baseEl.toFixed(0),modelName:me?me.name:p.model,elapsed};
       this.lastCoverageData = {covPts,dirReach,antPos:{lat:p.lat,lng:p.lng},modelName:p.model};
+      this.checkRepeaterReachability();
       this.progressPct=100; this.calculating=false;
       this.setStatus('Cobertura calculada! Max: '+maxDist+' km | Media: '+avgDist+' km | Area: ~'+area+' km²','success');
     },
@@ -886,6 +997,67 @@ Vue.createApp({
         });
       }
     },
+    // --- Repetidoras ---
+    addRepeater() {
+      const r = {...this.newRepeater, id: Date.now(), active: true, reachable: null};
+      this.repeaters.push(r);
+      this.saveRepeaters();
+      this.updateRepeaterMarkers();
+      this.resetRepeaterForm();
+      this.setStatus('Repetidora "' + (r.name || 'Sem nome') + '" adicionada.');
+    },
+    removeRepeater(idx) {
+      this.repeaters.splice(idx, 1);
+      this.saveRepeaters();
+      this.updateRepeaterMarkers();
+    },
+    resetRepeaterForm() {
+      this.newRepeater = {name:'', lat:null, lng:null, freq:145.000, shift:'-0.600', tone:'88.5'};
+      this.showRepeaterForm = false;
+      this.placingRepeater = false;
+    },
+    cancelRepeaterForm() {
+      this.resetRepeaterForm();
+    },
+    startRepeaterPlacement() {
+      this.placingRepeater = !this.placingRepeater;
+      if (this.placingRepeater) this.setStatus('Clique no mapa para definir a posicao da repetidora.');
+    },
+    saveRepeaters() {
+      const toSave = this.repeaters.map(({reachable, ...rest}) => rest);
+      localStorage.setItem('radioplanbr-repeaters', JSON.stringify(toSave));
+    },
+    updateRepeaterMarkers() {
+      gRepeaterMarkers.forEach(m => m.setMap(null));
+      gRepeaterMarkers = [];
+      if (!gMap) return;
+      for (const rpt of this.repeaters) {
+        if (!rpt.active || rpt.lat == null || rpt.lng == null) continue;
+        const marker = new google.maps.Marker({
+          position: {lat: rpt.lat, lng: rpt.lng},
+          map: gMap,
+          title: (rpt.name || 'Repetidora') + ' — ' + rpt.freq + ' MHz',
+          icon: {
+            path: 'M 0,-24 L 0,0 M -8,0 L 8,0 M -12,-20 L 0,-28 L 12,-20 M -8,-16 L 0,-22 L 8,-16',
+            scale: 1.2, fillColor: '#d50000', fillOpacity: 1,
+            strokeColor: '#d50000', strokeWeight: 2.5,
+            anchor: new google.maps.Point(0, 0)
+          }
+        });
+        gRepeaterMarkers.push(marker);
+      }
+    },
+    checkRepeaterReachability() {
+      if (!gPolygon) {
+        this.repeaters.forEach(r => r.reachable = null);
+        return;
+      }
+      for (const rpt of this.repeaters) {
+        if (rpt.lat == null || rpt.lng == null) { rpt.reachable = null; continue; }
+        const pos = new google.maps.LatLng(rpt.lat, rpt.lng);
+        rpt.reachable = google.maps.geometry.poly.containsLocation(pos, gPolygon);
+      }
+    },
     exportKML() {
       if (!this.lastCoverageData) { this.setStatus('Nenhuma cobertura para exportar.','error'); return; }
       const {covPts,antPos,modelName} = this.lastCoverageData;
@@ -898,6 +1070,11 @@ Vue.createApp({
     }
   },
   watch: {
+    params: {
+      handler(v) { localStorage.setItem('radioplanbr-params', JSON.stringify(v)); },
+      deep: true
+    },
+    apiKey(v) { localStorage.setItem('radioplanbr-apikey', v); },
     'params.antennaType'() { this.updateAzimuthLine(); },
     'params.antennaAzimuth'() { this.updateAzimuthLine(); },
     'params.antennaBeamwidth'() { this.updateAzimuthLine(); },
