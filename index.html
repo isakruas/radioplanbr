@@ -139,6 +139,12 @@ body{overflow:hidden}
                 <i class="bi bi-grid-3x3 me-1"></i>
                 Grid Locator: <strong class="font-monospace">{{ gridLocatorTx }}</strong>
               </div>
+              <div v-if="params.lat!=null && params.lng!=null" class="alert alert-secondary py-1 px-2 mt-1 mb-0 small">
+                <i class="bi bi-globe2 me-1"></i>
+                CQ Zone: <strong>{{ cqZoneTx }}</strong> &nbsp;|&nbsp;
+                ITU Zone: <strong>{{ ituZoneTx }}</strong> &nbsp;|&nbsp;
+                <strong>{{ ituRegionTx }}</strong>
+              </div>
               <button v-if="mapLoaded" @click="toggleMapLock" class="btn btn-sm w-100 mt-2" :class="mapLocked ? 'btn-warning' : 'btn-outline-secondary'">
                 <i class="bi me-1" :class="mapLocked ? 'bi-lock-fill' : 'bi-unlock'"></i>
                 {{ mapLocked ? 'Mapa travado — clique para destravar' : 'Travar posicao (evita cliques acidentais)' }}
@@ -1158,6 +1164,69 @@ function signalColor(dbm) {
   return '#d50000';                  // Marginal
 }
 
+function getITURegion(lat, lng) {
+  if (lng >= -170 && lng < -20) return 2;
+  if (lng > 60 && !(lat > 40 && lng < 70)) return 3;
+  return 1;
+}
+
+function getCQZone(lat, lng) {
+  if (lng < -25) {
+    if (lat > 67 || (lat > 54 && lng < -130)) return 1;
+    if (lat > 48) return lng < -70 ? 2 : 5;
+    if (lat > 30) return lng < -100 ? 3 : 4;
+    if (lat > 15) return lng < -85 ? 6 : 7;
+    if (lat > 2) return 8;
+    if (lat > -10) return lng < -65 ? 9 : 11;
+    if (lat > -35) return lng < -65 ? 12 : 11;
+    return 12;
+  }
+  if (lng <= 60) {
+    if (lat > 65) return 40;
+    if (lat > 35) { if (lng < -5) return 14; if (lng < 20) return 15; if (lng < 40) return 16; return 17; }
+    if (lat > 20) return 33;
+    if (lat > 0) return lng < 20 ? 35 : 34;
+    if (lat > -20) return 36;
+    return 38;
+  }
+  if (lat > 50) return lng < 100 ? 18 : 19;
+  if (lat > 30) return lng < 90 ? 21 : (lng < 120 ? 24 : 25);
+  if (lat > 0) return lng < 90 ? 22 : (lng < 120 ? 26 : 27);
+  if (lng > 100) return lat > -30 ? 28 : 30;
+  return 39;
+}
+
+function getITUZone(lat, lng) {
+  if (lng < -25) {
+    if (lat > 60) return lng < -100 ? 1 : 2;
+    if (lat > 48) return lng < -100 ? 3 : (lng < -70 ? 4 : 9);
+    if (lat > 30) return lng < -100 ? 6 : 7;
+    if (lat > 18) return lng < -90 ? 10 : 11;
+    if (lat > 7) return 12;
+    if (lat > 0) return lng < -65 ? 12 : 13;
+    if (lat > -10) return lng < -65 ? 13 : 15;
+    if (lat > -23.5) return lng < -57 ? 14 : 15;
+    if (lat > -35) return lng < -57 ? 14 : 15;
+    return 16;
+  }
+  if (lng <= 60 && lat > 30) {
+    if (lat > 65) return lng < 20 ? 18 : 19;
+    if (lat > 50) { if (lng < 5) return 27; if (lng < 20) return 28; return 29; }
+    if (lng < 10) return 37; if (lng < 30) return 28; return 39;
+  }
+  if (lng <= 60) {
+    if (lat > 15) return lng < 20 ? 46 : 47;
+    if (lat > 0) return lng < 20 ? 46 : 48;
+    if (lat > -15) return lng < 25 ? 52 : 53;
+    return lng < 30 ? 57 : 53;
+  }
+  if (lat > 40) return lng < 100 ? 30 : (lng < 130 ? 33 : 34);
+  if (lat > 20) return lng < 90 ? 41 : (lng < 120 ? 43 : 44);
+  if (lat > 0) return lng < 100 ? 49 : (lng < 120 ? 50 : 54);
+  if (lng > 100) return lat > -20 ? 55 : 59;
+  return 57;
+}
+
 function latLngToGridLocator(lat, lng) {
   lng = lng + 180; lat = lat + 90;
   const fLng = Math.floor(lng / 20), fLat = Math.floor(lat / 10);
@@ -1207,6 +1276,18 @@ Vue.createApp({
     gridLocatorTx() {
       if (this.params.lat == null || this.params.lng == null) return '';
       return latLngToGridLocator(this.params.lat, this.params.lng);
+    },
+    cqZoneTx() {
+      if (this.params.lat == null || this.params.lng == null) return '';
+      return getCQZone(this.params.lat, this.params.lng);
+    },
+    ituZoneTx() {
+      if (this.params.lat == null || this.params.lng == null) return '';
+      return getITUZone(this.params.lat, this.params.lng);
+    },
+    ituRegionTx() {
+      if (this.params.lat == null || this.params.lng == null) return '';
+      return 'Region ' + getITURegion(this.params.lat, this.params.lng);
     }
   },
   methods: {
