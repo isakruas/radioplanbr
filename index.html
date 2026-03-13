@@ -135,6 +135,10 @@ body{overflow:hidden}
                 <i class="bi bi-mountain me-1"></i>
                 Elevacao do terreno: <strong>{{ baseElevation.toFixed(1) }} m</strong>
               </div>
+              <div v-if="params.lat!=null && params.lng!=null" class="alert alert-secondary py-1 px-2 mt-1 mb-0 small">
+                <i class="bi bi-grid-3x3 me-1"></i>
+                Grid Locator: <strong class="font-monospace">{{ gridLocatorTx }}</strong>
+              </div>
               <button v-if="mapLoaded" @click="toggleMapLock" class="btn btn-sm w-100 mt-2" :class="mapLocked ? 'btn-warning' : 'btn-outline-secondary'">
                 <i class="bi me-1" :class="mapLocked ? 'bi-lock-fill' : 'bi-unlock'"></i>
                 {{ mapLocked ? 'Mapa travado — clique para destravar' : 'Travar posicao (evita cliques acidentais)' }}
@@ -494,6 +498,12 @@ body{overflow:hidden}
               <div>
                 <label class="form-label small mb-1">Opacidade: {{ params.fillOpacity }}%</label>
                 <input type="range" class="form-range" v-model.number="params.fillOpacity" min="5" max="80">
+              </div>
+              <div class="form-check mt-2">
+                <input class="form-check-input" type="checkbox" id="chkGrid" v-model="showGrid">
+                <label class="form-check-label small" for="chkGrid">
+                  <i class="bi bi-grid-3x3 me-1"></i>Grid Locator (Maidenhead)
+                </label>
               </div>
             </div>
           </div>
@@ -1137,6 +1147,7 @@ async function getElevBatch(pts) {
 // gPolygon: poligono de cobertura, gSignalCircles: circulos de heatmap por ponto amostrado,
 // gAzimuthLine: seta de azimute da antena, gPatternOverlay: diagrama de irradiacao no mapa.
 let gMap = null, gMarker = null, gPolygon = null, gSignalCircles = [], gAzimuthLine = null, gPatternOverlay = null, gRepeaterMarkers = [];
+let gGridRects = [], gGridLabels = [];
 
 // Cor fixa por faixa de sinal (escala discreta, nao interpolada)
 function signalColor(dbm) {
@@ -1145,6 +1156,17 @@ function signalColor(dbm) {
   if (dbm > -100) return '#ffd600'; // Moderado
   if (dbm > -110) return '#ff6d00'; // Fraco
   return '#d50000';                  // Marginal
+}
+
+function latLngToGridLocator(lat, lng) {
+  lng = lng + 180; lat = lat + 90;
+  const fLng = Math.floor(lng / 20), fLat = Math.floor(lat / 10);
+  const sLng = Math.floor((lng - fLng * 20) / 2), sLat = Math.floor((lat - fLat * 10) / 1);
+  const ssLng = Math.floor((lng - fLng * 20 - sLng * 2) / (2/24));
+  const ssLat = Math.floor((lat - fLat * 10 - sLat * 1) / (1/24));
+  return String.fromCharCode(65 + fLng) + String.fromCharCode(65 + fLat)
+    + sLng + sLat
+    + String.fromCharCode(97 + Math.min(ssLng, 23)) + String.fromCharCode(97 + Math.min(ssLat, 23));
 }
 
 Vue.createApp({
@@ -1174,12 +1196,17 @@ Vue.createApp({
       customPattern: JSON.parse(localStorage.getItem('radioplanbr-custom-pattern') || '[]'),
       customPatternLoaded: JSON.parse(localStorage.getItem('radioplanbr-custom-pattern') || '[]').length >= 36,
       customPatternRaw: '',
-      customPatternError: ''
+      customPatternError: '',
+      showGrid: false
     };
   },
   computed: {
     computedEirp() {
       return (10 * Math.log10((this.params.power || 0.01) * 1000) + (this.params.txGain || 0) - (this.params.cableLoss || 0) - (this.params.polLoss || 0)).toFixed(1);
+    },
+    gridLocatorTx() {
+      if (this.params.lat == null || this.params.lng == null) return '';
+      return latLngToGridLocator(this.params.lat, this.params.lng);
     }
   },
   methods: {
@@ -1240,6 +1267,8 @@ Vue.createApp({
         }
         if (!this.mapLocked) this.placeAntenna(e.latLng.lat(), e.latLng.lng());
       });
+      let gridTimer = null;
+      gMap.addListener('bounds_changed', () => { if (this.showGrid) { clearTimeout(gridTimer); gridTimer = setTimeout(() => this.drawGridLocator(), 200); } });
       this.mapLoaded = true;
       // Restaurar antena salva no localStorage
       if (this.params.lat != null && this.params.lng != null && !isNaN(this.params.lat) && !isNaN(this.params.lng)) {
@@ -1293,6 +1322,46 @@ Vue.createApp({
         else this.params.maxRadius = 3000;
       }
       this.setStatus('Preset aplicado: ' + b.name + ' (' + b.freq + ' MHz)');
+    },
+    clearGrid() {
+      gGridRects.forEach(r => r.setMap(null)); gGridRects = [];
+      gGridLabels.forEach(m => m.setMap(null)); gGridLabels = [];
+    },
+    drawGridLocator() {
+      this.clearGrid();
+      if (!this.showGrid || !gMap) return;
+      const bounds = gMap.getBounds();
+      if (!bounds) return;
+      const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
+      const zoom = gMap.getZoom();
+      let stepLng, stepLat, chars;
+      if (zoom <= 6) { stepLng = 20; stepLat = 10; chars = 2; }
+      else if (zoom <= 10) { stepLng = 2; stepLat = 1; chars = 4; }
+      else { stepLng = 2/24; stepLat = 1/24; chars = 6; }
+      const startLng = Math.floor((sw.lng() + 180) / stepLng) * stepLng - 180;
+      const startLat = Math.floor((sw.lat() + 90) / stepLat) * stepLat - 90;
+      const endLng = ne.lng(), endLat = ne.lat();
+      const maxCells = 600;
+      let count = 0;
+      for (let lng = startLng; lng < endLng && count < maxCells; lng += stepLng) {
+        for (let lat = startLat; lat < endLat && count < maxCells; lat += stepLat) {
+          count++;
+          const rect = new google.maps.Rectangle({
+            bounds: { north: lat + stepLat, south: lat, east: lng + stepLng, west: lng },
+            map: gMap, strokeColor: '#ffffff', strokeOpacity: 0.45, strokeWeight: 1,
+            fillColor: '#ffffff', fillOpacity: 0.03, clickable: false, zIndex: 1
+          });
+          gGridRects.push(rect);
+          const label = latLngToGridLocator(lat + stepLat / 2, lng + stepLng / 2).substring(0, chars);
+          const marker = new google.maps.Marker({
+            position: { lat: lat + stepLat / 2, lng: lng + stepLng / 2 },
+            map: gMap, clickable: false, zIndex: 2,
+            icon: { path: 'M 0,0', scale: 0 },
+            label: { text: label, color: '#ffffffcc', fontSize: chars <= 2 ? '13px' : chars <= 4 ? '11px' : '9px', fontFamily: 'monospace', fontWeight: 'bold' }
+          });
+          gGridLabels.push(marker);
+        }
+      }
     },
     setStatus(msg, type) { this.statusMsg = msg; this.statusType = type || ''; },
     clearCoverage() {
@@ -1594,7 +1663,8 @@ Vue.createApp({
     customPattern(v) {
       localStorage.setItem('radioplanbr-custom-pattern', JSON.stringify(v));
       this.updateAzimuthLine();
-    }
+    },
+    showGrid(v) { if (v) this.drawGridLocator(); else this.clearGrid(); }
   },
   mounted() { window.onMapReady = () => this.onMapReady(); }
 }).mount('#app');
